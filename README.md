@@ -10,9 +10,10 @@ The real Jev is a closed API with no open weights, so this rebuilds the
 (`answerdotai/ModernBERT-base`, 149M params).
 
 The head trains: `make train` fits it on all four datasets at once, supervised
-on their gold labels, and tracks the run in MLflow. The backbone stays frozen,
-runs are canary-sized by default, and calibration is still out of scope - **the
-numbers a short run reports are not an accuracy claim**. See
+on their gold labels, and tracks the run in MLflow. A full run reaches **0.73
+mean macro-F1** over the four questions on their test splits, with the backbone
+frozen throughout ([Results](#results)). That is an accuracy number only -
+calibration, which is Jev's actual claim, is still out of scope. See
 [Training](#training) and [Not implemented](#not-implemented).
 
 ## The architecture
@@ -199,7 +200,42 @@ no improvement best=0.2927 epoch=4 patience_left=1
 ```
 
 That is a 100-sample canary over four epochs: enough to show the loop learns
-and then overfits, not enough to mean anything. Run `--limit all` for numbers.
+and then overfits, not enough to mean anything.
+
+### Results
+
+One full run, every split at full size, on an Apple M-series GPU (`mps`) with
+`JEV_BATCH_SIZE=128`: 7 epochs in 1h04m, early stopped on patience 3 with
+epoch 4 as the best. The first epoch costs 20 minutes to Metal kernel warmup,
+every later one about 7. Test numbers come from that
+checkpoint, reloaded before the test pass.
+
+| question | options | accuracy | f1_macro | f1_weighted | precision_macro | recall_macro | loss | support |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `intent` | 77 | 0.859 | **0.860** | 0.860 | 0.871 | 0.859 | 0.537 | 3080 |
+| `emotion` | 6 | 0.853 | **0.797** | 0.852 | 0.805 | 0.790 | 0.405 | 2000 |
+| `sentiment` | 3 | 0.658 | **0.645** | 0.655 | 0.664 | 0.642 | 0.765 | 12284 |
+| `irony` | 2 | 0.634 | **0.624** | 0.637 | 0.624 | 0.628 | 0.654 | 784 |
+
+Mean macro-F1 is 0.732 on test, 0.753 on validation at the selected epoch. The
+selection criterion by epoch was 0.686, 0.726, 0.751, **0.753**, 0.752, 0.749,
+0.747 - a plateau and then decay, which is what exhausted the patience.
+
+What the spread says, given only the head was trained:
+
+- `intent` at 0.86 macro-F1 over **77 classes** is the real result. Banking
+  intents are lexically separable, so a cross-attention read of frozen
+  features finds them, and a 3M-parameter head is enough to score 77 text
+  options against that read.
+- `sentiment` at 0.65 and `irony` at 0.62 are where the frozen backbone binds.
+  Both need tone rather than topic, and fixed ModernBERT features do not carry
+  it. Irony is a balanced two-class question, so 0.62 is close to the floor
+  that matters - that task wants backbone finetuning, which this repo does not
+  do by design.
+
+So the architecture holds up and the loop works; the ceiling here is the frozen
+encoder, not the head. None of this says anything about whether the
+probabilities are calibrated.
 
 ## Not implemented
 
