@@ -1,0 +1,247 @@
+{
+  "questions": {
+    "$defs": {
+      "ChoiceQuestion": {
+        "properties": {
+          "type": {
+            "const": "choice",
+            "default": "choice",
+            "title": "Type",
+            "type": "string"
+          },
+          "prompt": {
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 255,
+            "minItems": 2,
+            "title": "Options",
+            "type": "array"
+          }
+        },
+        "required": [
+          "prompt",
+          "options"
+        ],
+        "title": "ChoiceQuestion",
+        "type": "object"
+      },
+      "NoulQuestion": {
+        "properties": {
+          "type": {
+            "const": "noul",
+            "default": "noul",
+            "title": "Type",
+            "type": "string"
+          },
+          "prompt": {
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "title": "NoulQuestion",
+        "type": "object"
+      },
+      "ScoreQuestion": {
+        "properties": {
+          "type": {
+            "const": "score",
+            "default": "score",
+            "title": "Type",
+            "type": "string"
+          },
+          "prompt": {
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "tiers": {
+            "maximum": 10,
+            "minimum": 2,
+            "title": "Tiers",
+            "type": "integer"
+          },
+          "rubric": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Rubric"
+          }
+        },
+        "required": [
+          "prompt",
+          "tiers"
+        ],
+        "title": "ScoreQuestion",
+        "type": "object"
+      }
+    },
+    "additionalProperties": {
+      "discriminator": {
+        "mapping": {
+          "choice": "#/$defs/ChoiceQuestion",
+          "noul": "#/$defs/NoulQuestion",
+          "score": "#/$defs/ScoreQuestion"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ChoiceQuestion"
+        },
+        {
+          "$ref": "#/$defs/ScoreQuestion"
+        },
+        {
+          "$ref": "#/$defs/NoulQuestion"
+        }
+      ]
+    },
+    "description": "The schema of one request: every question is answered in the same pass.",
+    "title": "QuestionSet",
+    "type": "object"
+  },
+  "verdict": {
+    "$defs": {
+      "ChoiceDecision": {
+        "properties": {
+          "type": {
+            "const": "choice",
+            "default": "choice",
+            "title": "Type",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          },
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "distribution": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Distribution",
+            "type": "object"
+          }
+        },
+        "required": [
+          "value",
+          "confidence",
+          "distribution"
+        ],
+        "title": "ChoiceDecision",
+        "type": "object"
+      },
+      "NoulDecision": {
+        "properties": {
+          "type": {
+            "const": "noul",
+            "default": "noul",
+            "title": "Type",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "boolean"
+          },
+          "p_yes": {
+            "title": "P Yes",
+            "type": "number"
+          },
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          }
+        },
+        "required": [
+          "value",
+          "p_yes",
+          "confidence"
+        ],
+        "title": "NoulDecision",
+        "type": "object"
+      },
+      "ScoreDecision": {
+        "properties": {
+          "type": {
+            "const": "score",
+            "default": "score",
+            "title": "Type",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "integer"
+          },
+          "expected": {
+            "title": "Expected",
+            "type": "number"
+          },
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "distribution": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Distribution",
+            "type": "object"
+          }
+        },
+        "required": [
+          "value",
+          "expected",
+          "confidence",
+          "distribution"
+        ],
+        "title": "ScoreDecision",
+        "type": "object"
+      }
+    },
+    "additionalProperties": {
+      "discriminator": {
+        "mapping": {
+          "choice": "#/$defs/ChoiceDecision",
+          "noul": "#/$defs/NoulDecision",
+          "score": "#/$defs/ScoreDecision"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ChoiceDecision"
+        },
+        {
+          "$ref": "#/$defs/ScoreDecision"
+        },
+        {
+          "$ref": "#/$defs/NoulDecision"
+        }
+      ]
+    },
+    "title": "Verdict",
+    "type": "object"
+  }
+}
