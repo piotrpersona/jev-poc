@@ -14,12 +14,15 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 
 from jev.schema import ChoiceQuestion, NoulQuestion, Question, QuestionSet, ScoreQuestion
 
 Kind = Literal["choice", "score", "noul"]
+Split = Literal["train", "validation", "test"]
 Gold = str | int | bool
+
+VALIDATION_FRACTION = 0.1
 
 
 @dataclass(frozen=True)
@@ -29,8 +32,8 @@ class TaskSpec:
     prompt: str
     path: str
     config: str | None
-    split: str
     text_field: str
+    has_validation: bool = True
 
 
 TASKS: tuple[TaskSpec, ...] = (
@@ -40,8 +43,8 @@ TASKS: tuple[TaskSpec, ...] = (
         prompt="Which banking intent does this customer message express?",
         path="legacy-datasets/banking77",
         config=None,
-        split="test",
         text_field="text",
+        has_validation=False,
     ),
     TaskSpec(
         key="emotion",
@@ -49,7 +52,6 @@ TASKS: tuple[TaskSpec, ...] = (
         prompt="Which emotion does the author of this text feel?",
         path="dair-ai/emotion",
         config=None,
-        split="test",
         text_field="text",
     ),
     TaskSpec(
@@ -58,7 +60,6 @@ TASKS: tuple[TaskSpec, ...] = (
         prompt="How positive is the tone of this text?",
         path="cardiffnlp/tweet_eval",
         config="sentiment",
-        split="test",
         text_field="text",
     ),
     TaskSpec(
@@ -67,7 +68,6 @@ TASKS: tuple[TaskSpec, ...] = (
         prompt="Is this text ironic?",
         path="cardiffnlp/tweet_eval",
         config="irony",
-        split="test",
         text_field="text",
     ),
 )
@@ -85,6 +85,7 @@ class Sample:
 @dataclass(frozen=True)
 class LoadedTask:
     spec: TaskSpec
+    split: Split
     question: Question
     samples: list[Sample]
 
@@ -149,20 +150,49 @@ def stratified_take(labels: Sequence[int], count: int, seed: int) -> list[int]:
     return taken
 
 
-def load_task(spec: TaskSpec, limit: str = "100", seed: int = 7) -> LoadedTask:
-    dataset = load_dataset(spec.path, spec.config, split=spec.split)
-    question = build_question(spec, dataset.features["label"].names)
+def split_rows(spec: TaskSpec, split: Split, seed: int) -> tuple[Dataset, list[int]]:
+    """Rows of `split`; a set without a validation split lends one from train.
+
+    The carve is the same stratified round-robin used for sampling and is keyed
+    on `seed`, so train and validation stay disjoint across calls.
+    """
+    if spec.has_validation or split == "test":
+        dataset = load_dataset(spec.path, spec.config, split=split)
+        return dataset, list(range(len(dataset)))
+
+    dataset = load_dataset(spec.path, spec.config, split="train")
     labels: list[int] = list(dataset["label"])
-    indices = stratified_take(labels, resolve_limit(limit, len(labels)), seed)
+    held = stratified_take(labels, round(len(labels) * VALIDATION_FRACTION), seed)
+    if split == "validation":
+        return dataset, sorted(held)
+    return dataset, sorted(set(range(len(labels))) - set(held))
+
+
+def load_task(
+    spec: TaskSpec,
+    split: Split = "test",
+    limit: str = "100",
+    seed: int = 7,
+) -> LoadedTask:
+    dataset, rows = split_rows(spec, split, seed)
+    question = build_question(spec, dataset.features["label"].names)
+    all_labels: list[int] = list(dataset["label"])
+    labels = [all_labels[row] for row in rows]
+    taken = stratified_take(labels, resolve_limit(limit, len(labels)), seed)
+    texts = dataset.select([rows[index] for index in taken])[spec.text_field]
     samples = [
         Sample(
-            state=dataset[index][spec.text_field],
+            state=text,
             label=labels[index],
             gold=gold_value(question, labels[index]),
         )
-        for index in indices
+        for text, index in zip(texts, taken, strict=True)
     ]
-    return LoadedTask(spec=spec, question=question, samples=samples)
+    return LoadedTask(spec=spec, split=split, question=question, samples=samples)
+
+
+def load_tasks(split: Split, limit: str, seed: int) -> list[LoadedTask]:
+    return [load_task(spec, split=split, limit=limit, seed=seed) for spec in TASKS]
 
 
 def question_set(tasks: Sequence[LoadedTask]) -> QuestionSet:

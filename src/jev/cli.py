@@ -1,9 +1,10 @@
-"""Demo entry point: run real dataset states through the untrained architecture.
+"""Command line entry points.
 
-The head is randomly initialised, so the decisions carry no accuracy - what the
-demo shows is the shape of the architecture and the invariants that hold by
-construction: every answer is schema-valid, every question's probabilities are
-normalised over its own options only, and padded option slots stay at zero.
+`demo` runs real dataset states through the model - with a random head it shows
+the shape of the architecture and the invariants that hold by construction
+(every answer schema-valid, every question normalised over its own options,
+padded slots at zero); pass `--checkpoint` to run a trained head instead.
+`train` fits the head. `gen-schema` exports the typed API.
 """
 
 from __future__ import annotations
@@ -16,8 +17,9 @@ from pathlib import Path
 import structlog
 import torch
 
+from jev.checkpoint import load_head
 from jev.config import JevConfig, configure_logging
-from jev.datasets import TASKS, TASKS_BY_KEY, load_task, question_set
+from jev.datasets import TASKS_BY_KEY, load_tasks, question_set
 from jev.model import JevModel
 from jev.schema import (
     ChoiceDecision,
@@ -66,7 +68,7 @@ def run_demo(args: argparse.Namespace) -> None:
     config = JevConfig.from_env()
     log.info("device", device=str(config.torch_device), backbone=config.backbone)
 
-    tasks = [load_task(spec, limit=args.limit, seed=args.seed) for spec in TASKS]
+    tasks = load_tasks("test", args.limit, args.seed)
     questions = question_set(tasks)
     source = next(task for task in tasks if task.spec.key == args.task)
     states = [sample.state for sample in source.samples]
@@ -81,13 +83,20 @@ def run_demo(args: argparse.Namespace) -> None:
         "states",
         task=source.spec.key,
         dataset=source.spec.path,
-        split=source.spec.split,
+        split=source.split,
         count=len(states),
         classes=len(source.breakdown()),
     )
     log.info("breakdown", **{str(k): v for k, v in list(source.breakdown().items())[:8]})
 
     model = JevModel(config).eval()
+    if args.checkpoint:
+        trained_on = load_head(Path(args.checkpoint), model)
+        if trained_on.fingerprint() != questions.fingerprint():
+            raise SystemExit(f"{args.checkpoint} was trained on a different question set")
+        log.info("head", checkpoint=args.checkpoint, state="trained")
+    else:
+        log.info("head", state="random init, confidences are uninformative")
     log.info(
         "parameters",
         backbone=sum(p.numel() for p in model.backbone.parameters()),
@@ -130,6 +139,26 @@ def trim(verdict: Verdict, top: int = 3) -> dict[str, object]:
     return out
 
 
+def run_train(args: argparse.Namespace) -> None:
+    from jev.training import TrainConfig, train
+
+    configure_logging()
+    train(
+        JevConfig.from_env(),
+        TrainConfig(
+            limit=args.limit,
+            epochs=args.epochs,
+            learning_rate=args.lr,
+            weight_decay=args.weight_decay,
+            patience=args.patience,
+            seed=args.seed,
+            experiment=args.experiment,
+            run_name=args.run_name,
+            out_dir=Path(args.out),
+        ),
+    )
+
+
 def run_gen_schema(args: argparse.Namespace) -> None:
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -155,7 +184,20 @@ def main() -> None:
     demo.add_argument("--limit", default="100", help="count, percentage (10%%) or 'all'")
     demo.add_argument("--show", type=int, default=3)
     demo.add_argument("--seed", type=int, default=7)
+    demo.add_argument("--checkpoint", help="trained head from `jev train`")
     demo.set_defaults(handler=run_demo)
+
+    train = sub.add_parser("train", help="fit the head on all four tasks at once")
+    train.add_argument("--limit", default="100", help="per task per split: count, 10%% or 'all'")
+    train.add_argument("--epochs", type=int, default=20)
+    train.add_argument("--lr", type=float, default=3e-4)
+    train.add_argument("--weight-decay", type=float, default=0.01)
+    train.add_argument("--patience", type=int, default=3)
+    train.add_argument("--seed", type=int, default=7)
+    train.add_argument("--experiment", default="jev-poc")
+    train.add_argument("--run-name")
+    train.add_argument("--out", default="out")
+    train.set_defaults(handler=run_train)
 
     gen = sub.add_parser("gen-schema", help="export the JSON Schema of the typed API")
     gen.add_argument("--out", default="schema/jev.schema.json")

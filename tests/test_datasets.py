@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import pytest
 
+import jev.datasets as datasets_module
 from jev.datasets import (
     TASKS_BY_KEY,
     build_question,
     gold_value,
     humanise,
     resolve_limit,
+    split_rows,
     stratified_take,
 )
 from jev.schema import ChoiceQuestion, NoulQuestion, ScoreQuestion
@@ -66,3 +68,26 @@ def test_noul_rejects_a_non_binary_label_column() -> None:
 
 def test_humanise() -> None:
     assert humanise("card_arrival") == "card arrival"
+
+
+def test_carved_validation_never_overlaps_train(monkeypatch: pytest.MonkeyPatch) -> None:
+    """banking77 has no validation split, so one is carved out of train."""
+    from datasets import ClassLabel, Dataset, Features, Value
+
+    rows = {"text": [f"row {i}" for i in range(100)], "label": [i % 5 for i in range(100)]}
+    features = Features(
+        {"text": Value("string"), "label": ClassLabel(names=[f"c{i}" for i in range(5)])}
+    )
+    monkeypatch.setattr(
+        datasets_module, "load_dataset", lambda *_, **__: Dataset.from_dict(rows, features=features)
+    )
+
+    spec = TASKS_BY_KEY["intent"]
+    assert spec.has_validation is False
+    _, train_rows = split_rows(spec, "train", seed=7)
+    _, validation_rows = split_rows(spec, "validation", seed=7)
+
+    assert len(validation_rows) == 10
+    assert set(train_rows).isdisjoint(validation_rows)
+    assert sorted(train_rows + validation_rows) == list(range(100))
+    assert len({rows["label"][row] for row in validation_rows}) == 5

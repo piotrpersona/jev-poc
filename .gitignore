@@ -12,3 +12,9 @@ dist/
 
 .hf-cache/
 out/
+mlruns/
+mlartifacts/
+mlflow.db
+
+.claude/
+.serena/

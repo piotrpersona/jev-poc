@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 from conftest import assert_schema_shaped
 
+from jev.checkpoint import load_head
 from jev.config import JevConfig
 from jev.model import JevModel
 from jev.schema import ChoiceDecision, ChoiceQuestion, NoulQuestion, QuestionSet, ScoreQuestion
+from jev.training import TrainConfig, train
 
 pytestmark = pytest.mark.skipif(
     not os.getenv("JEV_E2E"), reason="set JEV_E2E=1 to download weights"
@@ -64,3 +67,37 @@ def test_e2e_schema_is_encoded_once(model: JevModel) -> None:
     model.probabilities(STATES, QUESTIONS)
     model.probabilities(STATES, QUESTIONS)
     assert len(model._schema_cache) == 1
+
+
+def test_e2e_training_canary_produces_a_tracked_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", f"sqlite:///{tmp_path / 'mlflow.db'}")
+    monkeypatch.setenv("MLFLOW_EXPERIMENT_NAME", "jev-poc-tests")
+    out = tmp_path / "out"
+
+    metrics = train(
+        JevConfig.from_env(),
+        TrainConfig(limit="4", epochs=1, patience=1, out_dir=out, run_name="pytest-canary"),
+    )
+
+    assert set(metrics) >= {"test/mean_f1_macro", "test/loss", "test/irony/f1_macro"}
+    assert len(list(out.glob("*/best_head.pt"))) == 1
+    assert len(list(out.glob("*/figures/test_*_confusion.html"))) == 4
+    assert len(list(out.glob("*/per_class/*.json"))) == 3
+
+
+def test_e2e_a_trained_head_loads_back_into_a_fresh_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", f"sqlite:///{tmp_path / 'mlflow.db'}")
+    out = tmp_path / "out"
+    train(JevConfig.from_env(), TrainConfig(limit="4", epochs=1, patience=1, out_dir=out))
+    checkpoint = next(out.glob("*/best_head.pt"))
+
+    model = JevModel(JevConfig.from_env()).eval()
+    trained_on = load_head(checkpoint, model)
+
+    assert trained_on.keys == ["intent", "emotion", "sentiment", "irony"]
+    probs = model.probabilities(STATES, QUESTIONS).float().cpu()
+    assert_schema_shaped(probs, QUESTIONS.arities)

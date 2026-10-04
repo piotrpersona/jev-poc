@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Self
 
 import torch
 from torch import Tensor, nn
@@ -24,15 +25,28 @@ class SchemaEmbedding:
 
 
 class JevModel(nn.Module):
+    """The backbone is a frozen feature extractor; only the sampler is trained.
+
+    Freezing it keeps the schema embeddings constant, which is what lets the
+    schema cache survive training, and keeps the autograd graph to the 3M-param
+    head - the backbone pass builds no graph at all.
+    """
+
     def __init__(self, config: JevConfig, backbone: Backbone | None = None) -> None:
         super().__init__()
         self.config = config
         self.backbone = backbone or Backbone(config)
+        self.backbone.requires_grad_(False)
         self.sampler = ParallelSampler(self.backbone.hidden_size, config.attention_heads)
         self._schema_cache: dict[str, SchemaEmbedding] = {}
         self.to(config.torch_device)
 
-    @torch.inference_mode()
+    def train(self, mode: bool = True) -> Self:
+        super().train(mode)
+        self.backbone.eval()
+        return self
+
+    @torch.no_grad()
     def embed_schema(self, questions: QuestionSet) -> SchemaEmbedding:
         cached = self._schema_cache.get(questions.fingerprint())
         if cached is not None:
@@ -57,20 +71,23 @@ class JevModel(nn.Module):
         self._schema_cache[questions.fingerprint()] = embedded
         return embedded
 
-    @torch.inference_mode()
-    def probabilities(self, states: Sequence[str], questions: QuestionSet) -> Tensor:
-        """-> [B, Q, O]; padded option slots hold exactly zero."""
+    def forward(self, states: Sequence[str], questions: QuestionSet) -> Tensor:
+        """-> logits [B, Q, O]; padded option slots hold -inf."""
         schema = self.embed_schema(questions)
         state_tokens, state_mask = self.backbone.encode_state(states)
         batch = len(states)
-        logits = self.sampler(
+        return self.sampler(
             state_tokens=state_tokens,
             state_mask=state_mask,
             question_emb=schema.question_emb.expand(batch, -1, -1),
             option_emb=schema.option_emb.expand(batch, -1, -1, -1),
             option_mask=schema.option_mask.expand(batch, -1, -1),
         )
-        return logits.softmax(dim=-1)
+
+    @torch.inference_mode()
+    def probabilities(self, states: Sequence[str], questions: QuestionSet) -> Tensor:
+        """-> [B, Q, O]; padded option slots hold exactly zero."""
+        return self(states, questions).softmax(dim=-1)
 
     def decide(self, states: Sequence[str], questions: QuestionSet) -> list[Verdict]:
         verdicts: list[Verdict] = []
