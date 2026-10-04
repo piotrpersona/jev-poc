@@ -52,11 +52,13 @@ Measured on an M-series GPU, 4 questions of 3 different types in one pass
 (77 / 6 / 3 / 2 options): logits `[8, 4, 77]`, ~77 ms per state, probability
 mass `1.000000` per question, exactly zero on padded slots, zero type errors.
 
-**What this is not:** the head is randomly initialised. No training, no RLCD, no
-calibration numbers. Calibration ("85% confidence means 85% correct") is Jev's
-actual product claim and this PoC cannot speak to it — confidences sit near
-1/77 on the 77-way question, exactly as an untrained head should. The point was
-the architecture, not the accuracy.
+**What this is not:** no RLCD, no calibration numbers. Calibration ("85%
+confidence means 85% correct") is Jev's actual product claim and this PoC cannot
+speak to it. The head *does* train now — frozen backbone, 0.73 mean macro-F1
+over the four questions — but that is accuracy, not calibration, and it is a
+separate post. Run it with a random head and confidences sit near 1/77 on the
+77-way question, exactly as an untrained head should. The point here was the
+architecture, not the accuracy.
 
 Questions I would like opinions on: is ordinal structure for `Score` better
 taught through the loss, or by making tier embeddings themselves ordered? And
